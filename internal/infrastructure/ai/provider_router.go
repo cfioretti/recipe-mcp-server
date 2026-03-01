@@ -20,7 +20,7 @@ import (
 const (
 	defaultProvider    = "ollama"
 	defaultOllamaURL   = "http://localhost:11434"
-	defaultOllamaModel = "llama3.1"
+	defaultOllamaModel = "llama3.2:3b"
 )
 
 type ProviderRouter struct {
@@ -33,7 +33,7 @@ type ProviderRouter struct {
 }
 
 func NewProviderRouterFromEnv() *ProviderRouter {
-	timeoutMs := readIntFromEnv("AI_HTTP_TIMEOUT_MS", 15000)
+	timeoutMs := readIntFromEnv("AI_HTTP_TIMEOUT_MS", 60000)
 	return &ProviderRouter{
 		client: &http.Client{
 			Timeout: time.Duration(timeoutMs) * time.Millisecond,
