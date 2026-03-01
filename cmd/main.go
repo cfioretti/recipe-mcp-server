@@ -14,7 +14,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/cfioretti/recipe-mcp-server/internal/application"
+	"github.com/cfioretti/recipe-mcp-server/internal/infrastructure/ai"
 	httpHandlers "github.com/cfioretti/recipe-mcp-server/internal/infrastructure/http"
+	apihttp "github.com/cfioretti/recipe-mcp-server/internal/interfaces/api/http"
 )
 
 const serviceName = "recipe-mcp-server"
@@ -37,7 +40,9 @@ func setupRouter(version string) *gin.Engine {
 	healthHandler := httpHandlers.NewHealthHandler(serviceName, version)
 	healthHandler.RegisterRoutes(router)
 
-	mcpHandler := httpHandlers.NewMCPHandler()
+	provider := ai.NewProviderRouterFromEnv()
+	recipeToolsService := application.NewRecipeToolsService(provider)
+	mcpHandler := apihttp.NewMCPHandler(recipeToolsService)
 	mcpHandler.RegisterRoutes(router)
 
 	return router
