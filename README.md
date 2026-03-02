@@ -31,6 +31,7 @@ The service supports multiple provider backends through environment variables:
 
 - `AI_PROVIDER`: `ollama` | `external` | `mock` (default: `ollama`)
 - `AI_HTTP_TIMEOUT_MS`: request timeout in milliseconds (default: `60000`)
+- `AI_GENERATION_MAX_ATTEMPTS`: max retry attempts when output is invalid (default: `2`)
 - `OLLAMA_BASE_URL`: Ollama URL (default: `http://localhost:11434`)
 - `OLLAMA_MODEL`: model name used for generation (default: `llama3.2:3b`)
 - `EXTERNAL_API_BASE_URL`: external provider base URL (required for `external`)

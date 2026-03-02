@@ -28,6 +28,7 @@ type ProviderRouter struct {
 	provider           string
 	ollamaBaseURL      string
 	ollamaModel        string
+	maxAttempts        int
 	externalAPIBaseURL string
 	externalAPIKey     string
 }
@@ -41,6 +42,7 @@ func NewProviderRouterFromEnv() *ProviderRouter {
 		provider:           strings.ToLower(readStringFromEnv("AI_PROVIDER", defaultProvider)),
 		ollamaBaseURL:      strings.TrimSuffix(readStringFromEnv("OLLAMA_BASE_URL", defaultOllamaURL), "/"),
 		ollamaModel:        readStringFromEnv("OLLAMA_MODEL", defaultOllamaModel),
+		maxAttempts:        readIntFromEnv("AI_GENERATION_MAX_ATTEMPTS", 2),
 		externalAPIBaseURL: strings.TrimSuffix(readStringFromEnv("EXTERNAL_API_BASE_URL", ""), "/"),
 		externalAPIKey:     readStringFromEnv("EXTERNAL_API_KEY", ""),
 	}
@@ -84,12 +86,12 @@ type ollamaGenerateResponse struct {
 
 func (r *ProviderRouter) generateWithOllama(ctx context.Context, request application.GenerateRecipeCommand) (*domain.RecipeDraft, error) {
 	prompt := buildGenerationPrompt(request)
-	return r.callOllama(ctx, prompt)
+	return r.callOllamaWithRetry(ctx, prompt)
 }
 
 func (r *ProviderRouter) customizeWithOllama(ctx context.Context, request application.CustomizeRecipeCommand) (*domain.RecipeDraft, error) {
 	prompt := buildCustomizationPrompt(request)
-	return r.callOllama(ctx, prompt)
+	return r.callOllamaWithRetry(ctx, prompt)
 }
 
 func (r *ProviderRouter) callOllama(ctx context.Context, prompt string) (*domain.RecipeDraft, error) {
@@ -127,6 +129,49 @@ func (r *ProviderRouter) callOllama(ctx context.Context, prompt string) (*domain
 	}
 
 	return parseRecipeDraftFromText(ollamaResp.Response)
+}
+
+func (r *ProviderRouter) callOllamaWithRetry(ctx context.Context, initialPrompt string) (*domain.RecipeDraft, error) {
+	maxAttempts := r.maxAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	currentPrompt := initialPrompt
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		draft, err := r.callOllama(ctx, currentPrompt)
+		if err == nil {
+			if validateErr := draft.Validate(); validateErr == nil {
+				return draft, nil
+			} else {
+				lastErr = validateErr
+				currentPrompt = buildRepairPrompt(initialPrompt, "", validateErr)
+				continue
+			}
+		}
+
+		lastErr = err
+		// Timeout/cancellation are usually infrastructure issues; retrying with a repair
+		// prompt does not help and only increases end-to-end latency.
+		if isContextOrTimeoutError(err) {
+			break
+		}
+		currentPrompt = buildRepairPrompt(initialPrompt, "", err)
+	}
+
+	return nil, fmt.Errorf("ollama generation failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+func isContextOrTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timeout")
 }
 
 type externalGeneratePayload struct {
@@ -270,40 +315,70 @@ func applyConstraintHints(draft *domain.RecipeDraft, constraints *domain.RecipeC
 }
 
 func parseRecipeDraftFromText(raw string) (*domain.RecipeDraft, error) {
+	cleaned := stripMarkdownCodeFences(strings.TrimSpace(raw))
+
 	var direct domain.RecipeDraft
-	if err := json.Unmarshal([]byte(raw), &direct); err == nil && direct.Name != "" {
+	if err := json.Unmarshal([]byte(cleaned), &direct); err == nil && direct.Name != "" {
 		return &direct, nil
 	}
 
 	var wrapped struct {
 		RecipeDraft domain.RecipeDraft `json:"recipeDraft"`
 	}
-	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && wrapped.RecipeDraft.Name != "" {
+	if err := json.Unmarshal([]byte(cleaned), &wrapped); err == nil && wrapped.RecipeDraft.Name != "" {
 		return &wrapped.RecipeDraft, nil
 	}
 
-	jsonBlob := extractJSONObject(raw)
-	if jsonBlob == "" {
+	candidates := extractJSONCandidates(cleaned)
+	if len(candidates) == 0 {
 		return nil, errors.New("no JSON object found in provider response")
 	}
-
-	if err := json.Unmarshal([]byte(jsonBlob), &direct); err == nil && direct.Name != "" {
-		return &direct, nil
-	}
-	if err := json.Unmarshal([]byte(jsonBlob), &wrapped); err == nil && wrapped.RecipeDraft.Name != "" {
-		return &wrapped.RecipeDraft, nil
+	for _, candidate := range candidates {
+		if err := json.Unmarshal([]byte(candidate), &direct); err == nil && direct.Name != "" {
+			return &direct, nil
+		}
+		if err := json.Unmarshal([]byte(candidate), &wrapped); err == nil && wrapped.RecipeDraft.Name != "" {
+			return &wrapped.RecipeDraft, nil
+		}
 	}
 
 	return nil, errors.New("unable to parse recipe draft from provider response")
 }
 
-func extractJSONObject(input string) string {
-	start := strings.Index(input, "{")
-	end := strings.LastIndex(input, "}")
-	if start == -1 || end == -1 || end <= start {
-		return ""
+func stripMarkdownCodeFences(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if strings.HasPrefix(trimmed, "```") && strings.HasSuffix(trimmed, "```") {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(trimmed, "```")
 	}
-	return input[start : end+1]
+	return strings.TrimSpace(trimmed)
+}
+
+func extractJSONCandidates(input string) []string {
+	var candidates []string
+	start := -1
+	depth := 0
+
+	for i, r := range input {
+		switch r {
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				candidates = append(candidates, input[start:i+1])
+				start = -1
+			}
+		}
+	}
+	return candidates
 }
 
 func buildGenerationPrompt(request application.GenerateRecipeCommand) string {
@@ -345,6 +420,24 @@ func buildCustomizationPrompt(request application.CustomizeRecipeCommand) string
 		request.Mode,
 		request.Prompt,
 		constraintsJSON,
+	)
+}
+
+func buildRepairPrompt(originalPrompt string, previousResponse string, validationErr error) string {
+	repairInstructions := "Your previous output could not be parsed/validated as recipe draft JSON."
+	if validationErr != nil {
+		repairInstructions = fmt.Sprintf("Your previous output is invalid: %s.", validationErr.Error())
+	}
+	previousOutputClause := ""
+	if strings.TrimSpace(previousResponse) != "" {
+		previousOutputClause = fmt.Sprintf(" Previous invalid output was: %s.", previousResponse)
+	}
+
+	return fmt.Sprintf(
+		"%s%s Please answer again and return ONLY valid JSON matching exactly this schema: {\"recipeDraft\":{\"name\":\"string\",\"description\":\"string\",\"author\":\"string\",\"dough\":{\"ingredient\":number},\"topping\":{\"ingredient\":number},\"steps\":[\"string\"]}}. Do not include markdown, prose, or code fences. Original task: %s",
+		repairInstructions,
+		previousOutputClause,
+		originalPrompt,
 	)
 }
 
