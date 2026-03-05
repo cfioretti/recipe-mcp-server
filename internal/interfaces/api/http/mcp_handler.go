@@ -87,9 +87,11 @@ func mapDomainErrorToHTTPStatus(err error) int {
 	switch {
 	case errors.Is(err, domain.ErrInvalidMode),
 		errors.Is(err, domain.ErrPromptRequired),
-		errors.Is(err, domain.ErrInvalidHydration),
-		errors.Is(err, domain.ErrInvalidRecipeData):
+		errors.Is(err, domain.ErrInvalidRecipeData),
+		errors.Is(err, domain.ErrOutputContractInvalid):
 		return stdhttp.StatusBadRequest
+	case errors.Is(err, domain.ErrOutputContractViolated):
+		return stdhttp.StatusUnprocessableEntity
 	default:
 		return stdhttp.StatusInternalServerError
 	}

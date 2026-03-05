@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,16 @@ import (
 	httpHandlers "github.com/cfioretti/recipe-mcp-server/internal/infrastructure/http"
 	apihttp "github.com/cfioretti/recipe-mcp-server/internal/interfaces/api/http"
 )
+
+func loadRecipeProvider() application.RecipeGenerationProvider {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("AI_PROVIDER")))
+	switch provider {
+	case "gemini":
+		return ai.NewGeminiProviderFromEnv()
+	default:
+		return ai.NewOllamaProviderFromEnv()
+	}
+}
 
 const serviceName = "recipe-mcp-server"
 
@@ -40,8 +51,7 @@ func setupRouter(version string) *gin.Engine {
 	healthHandler := httpHandlers.NewHealthHandler(serviceName, version)
 	healthHandler.RegisterRoutes(router)
 
-	provider := ai.NewProviderRouterFromEnv()
-	recipeToolsService := application.NewRecipeToolsService(provider)
+	recipeToolsService := application.NewRecipeToolsService(loadRecipeProvider())
 	mcpHandler := apihttp.NewMCPHandler(recipeToolsService)
 	mcpHandler.RegisterRoutes(router)
 

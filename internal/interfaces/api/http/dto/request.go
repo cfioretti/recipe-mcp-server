@@ -5,38 +5,32 @@ import (
 	"github.com/cfioretti/recipe-mcp-server/internal/domain"
 )
 
-type RecipeConstraintsRequest struct {
-	HydrationMin       *float64 `json:"hydrationMin,omitempty"`
-	HydrationMax       *float64 `json:"hydrationMax,omitempty"`
-	Vegetarian         *bool    `json:"vegetarian,omitempty"`
-	IncludeIngredients []string `json:"includeIngredients,omitempty"`
-	ExcludeIngredients []string `json:"excludeIngredients,omitempty"`
+type GenerateRecipeRequest struct {
+	Mode           string                 `json:"mode" binding:"required,oneof=random prompt"`
+	Prompt         string                 `json:"prompt,omitempty"`
+	OutputContract *OutputContractRequest `json:"outputContract,omitempty"`
 }
 
-func (r *RecipeConstraintsRequest) ToDomain() *domain.RecipeConstraints {
+type OutputContractRequest struct {
+	RequiredDoughIngredients   []string `json:"requiredDoughIngredients,omitempty"`
+	RequiredToppingIngredients []string `json:"requiredToppingIngredients,omitempty"`
+}
+
+func (r *OutputContractRequest) ToDomain() *domain.OutputContract {
 	if r == nil {
 		return nil
 	}
-	return &domain.RecipeConstraints{
-		HydrationMin:       r.HydrationMin,
-		HydrationMax:       r.HydrationMax,
-		Vegetarian:         r.Vegetarian,
-		IncludeIngredients: r.IncludeIngredients,
-		ExcludeIngredients: r.ExcludeIngredients,
+	return &domain.OutputContract{
+		RequiredDoughIngredients:   r.RequiredDoughIngredients,
+		RequiredToppingIngredients: r.RequiredToppingIngredients,
 	}
-}
-
-type GenerateRecipeRequest struct {
-	Mode        string                    `json:"mode" binding:"required,oneof=random prompt"`
-	Prompt      string                    `json:"prompt,omitempty"`
-	Constraints *RecipeConstraintsRequest `json:"constraints,omitempty"`
 }
 
 func (r GenerateRecipeRequest) ToApplication() application.GenerateRecipeCommand {
 	return application.GenerateRecipeCommand{
-		Mode:        domain.GenerationMode(r.Mode),
-		Prompt:      r.Prompt,
-		Constraints: r.Constraints.ToDomain(),
+		Mode:           domain.GenerationMode(r.Mode),
+		Prompt:         r.Prompt,
+		OutputContract: r.OutputContract.ToDomain(),
 	}
 }
 
@@ -61,17 +55,15 @@ func (r RecipeDraftRequest) ToDomain() domain.RecipeDraft {
 }
 
 type CustomizeRecipeRequest struct {
-	Mode        string                    `json:"mode" binding:"required,oneof=random prompt"`
-	Prompt      string                    `json:"prompt,omitempty"`
-	Constraints *RecipeConstraintsRequest `json:"constraints,omitempty"`
-	BaseRecipe  RecipeDraftRequest        `json:"baseRecipe" binding:"required"`
+	Mode       string             `json:"mode" binding:"required,oneof=random prompt"`
+	Prompt     string             `json:"prompt,omitempty"`
+	BaseRecipe RecipeDraftRequest `json:"baseRecipe" binding:"required"`
 }
 
 func (r CustomizeRecipeRequest) ToApplication() application.CustomizeRecipeCommand {
 	return application.CustomizeRecipeCommand{
-		Mode:        domain.GenerationMode(r.Mode),
-		Prompt:      r.Prompt,
-		Constraints: r.Constraints.ToDomain(),
-		BaseRecipe:  r.BaseRecipe.ToDomain(),
+		Mode:       domain.GenerationMode(r.Mode),
+		Prompt:     r.Prompt,
+		BaseRecipe: r.BaseRecipe.ToDomain(),
 	}
 }

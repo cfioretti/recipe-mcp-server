@@ -10,16 +10,15 @@ import (
 var ErrEmptyProviderResponse = errors.New("provider returned empty recipe draft")
 
 type GenerateRecipeCommand struct {
-	Mode        domain.GenerationMode
-	Prompt      string
-	Constraints *domain.RecipeConstraints
+	Mode           domain.GenerationMode
+	Prompt         string
+	OutputContract *domain.OutputContract
 }
 
 type CustomizeRecipeCommand struct {
-	Mode        domain.GenerationMode
-	Prompt      string
-	Constraints *domain.RecipeConstraints
-	BaseRecipe  domain.RecipeDraft
+	Mode       domain.GenerationMode
+	Prompt     string
+	BaseRecipe domain.RecipeDraft
 }
 
 type RecipeGenerationProvider interface {
@@ -67,8 +66,18 @@ func (s *RecipeToolsService) ListTools() []domain.ToolDefinition {
 					"prompt": map[string]any{
 						"type": "string",
 					},
-					"constraints": map[string]any{
+					"outputContract": map[string]any{
 						"type": "object",
+						"properties": map[string]any{
+							"requiredDoughIngredients": map[string]any{
+								"type":  "array",
+								"items": map[string]any{"type": "string"},
+							},
+							"requiredToppingIngredients": map[string]any{
+								"type":  "array",
+								"items": map[string]any{"type": "string"},
+							},
+						},
 					},
 				},
 			},
@@ -83,7 +92,7 @@ func (s *RecipeToolsService) ListTools() []domain.ToolDefinition {
 		},
 		{
 			Name:        "customize_recipe",
-			Description: "Customize an existing recipe draft with prompt and constraints.",
+			Description: "Customize an existing recipe draft with a prompt.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"required": []string{
@@ -97,9 +106,6 @@ func (s *RecipeToolsService) ListTools() []domain.ToolDefinition {
 					},
 					"prompt": map[string]any{
 						"type": "string",
-					},
-					"constraints": map[string]any{
-						"type": "object",
 					},
 					"baseRecipe": map[string]any{
 						"type": "object",
@@ -122,7 +128,8 @@ func (s *RecipeToolsService) GenerateRecipe(ctx context.Context, request Generat
 	if err := request.Mode.Validate(request.Prompt); err != nil {
 		return nil, err
 	}
-	if err := request.Constraints.Validate(); err != nil {
+	effectiveContract := request.OutputContract.Effective()
+	if err := effectiveContract.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -136,15 +143,15 @@ func (s *RecipeToolsService) GenerateRecipe(ctx context.Context, request Generat
 	if err := recipe.Validate(); err != nil {
 		return nil, err
 	}
+	if err := recipe.ValidateAgainstContract(effectiveContract); err != nil {
+		return nil, err
+	}
 
 	return recipe, nil
 }
 
 func (s *RecipeToolsService) CustomizeRecipe(ctx context.Context, request CustomizeRecipeCommand) (*domain.RecipeDraft, error) {
 	if err := request.Mode.Validate(request.Prompt); err != nil {
-		return nil, err
-	}
-	if err := request.Constraints.Validate(); err != nil {
 		return nil, err
 	}
 	if err := request.BaseRecipe.Validate(); err != nil {

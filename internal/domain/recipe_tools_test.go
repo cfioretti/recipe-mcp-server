@@ -31,19 +31,6 @@ func TestGenerationModeValidate(t *testing.T) {
 	}
 }
 
-func TestRecipeConstraintsValidate(t *testing.T) {
-	min := 80.0
-	max := 70.0
-	constraints := &RecipeConstraints{
-		HydrationMin: &min,
-		HydrationMax: &max,
-	}
-
-	if err := constraints.Validate(); !errors.Is(err, ErrInvalidHydration) {
-		t.Fatalf("expected ErrInvalidHydration, got %v", err)
-	}
-}
-
 func TestRecipeDraftValidate(t *testing.T) {
 	valid := RecipeDraft{
 		Name:    "Test Pizza",
@@ -62,5 +49,61 @@ func TestRecipeDraftValidate(t *testing.T) {
 	}
 	if err := invalid.Validate(); !errors.Is(err, ErrInvalidRecipeData) {
 		t.Fatalf("expected ErrInvalidRecipeData, got %v", err)
+	}
+}
+
+func TestOutputContractAndRecipeDraftContractValidation(t *testing.T) {
+	contract := DefaultOutputContract()
+	if err := contract.Validate(); err != nil {
+		t.Fatalf("expected valid default contract, got %v", err)
+	}
+
+	recipe := RecipeDraft{
+		Name:    "Contract Pizza",
+		Dough:   map[string]float64{"flour": 1000, "water": 680},
+		Topping: map[string]float64{"mozzarella": 250},
+	}
+	if err := recipe.ValidateAgainstContract(contract); err != nil {
+		t.Fatalf("expected recipe to satisfy default contract, got %v", err)
+	}
+
+	invalidContract := OutputContract{RequiredDoughIngredients: []string{"flour", ""}}
+	if err := invalidContract.Validate(); !errors.Is(err, ErrOutputContractInvalid) {
+		t.Fatalf("expected ErrOutputContractInvalid, got %v", err)
+	}
+
+	missingWater := RecipeDraft{
+		Name:    "Broken Pizza",
+		Dough:   map[string]float64{"flour": 1000},
+		Topping: map[string]float64{"mozzarella": 250},
+	}
+	if err := missingWater.ValidateAgainstContract(DefaultOutputContract()); !errors.Is(err, ErrOutputContractViolated) {
+		t.Fatalf("expected ErrOutputContractViolated, got %v", err)
+	}
+}
+
+func TestValidateAgainstContract_CaseInsensitive(t *testing.T) {
+	contract := DefaultOutputContract()
+
+	recipe := RecipeDraft{
+		Name:    "Case Test Pizza",
+		Dough:   map[string]float64{"Flour": 1000, "WATER": 680},
+		Topping: map[string]float64{"mozzarella": 250},
+	}
+	if err := recipe.ValidateAgainstContract(contract); err != nil {
+		t.Fatalf("expected case-insensitive match to pass, got %v", err)
+	}
+
+	contractWithTopping := OutputContract{
+		RequiredDoughIngredients:   []string{"flour"},
+		RequiredToppingIngredients: []string{"mozzarella"},
+	}
+	recipeMixed := RecipeDraft{
+		Name:    "Mixed Case",
+		Dough:   map[string]float64{"FLOUR": 500},
+		Topping: map[string]float64{"Mozzarella": 200},
+	}
+	if err := recipeMixed.ValidateAgainstContract(contractWithTopping); err != nil {
+		t.Fatalf("expected case-insensitive topping match to pass, got %v", err)
 	}
 }

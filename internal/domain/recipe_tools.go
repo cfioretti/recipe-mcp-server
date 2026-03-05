@@ -7,10 +7,11 @@ import (
 )
 
 var (
-	ErrInvalidMode       = errors.New("invalid mode")
-	ErrPromptRequired    = errors.New("prompt is required when mode is prompt")
-	ErrInvalidHydration  = errors.New("hydration range is invalid")
-	ErrInvalidRecipeData = errors.New("recipe draft is invalid")
+	ErrInvalidMode            = errors.New("invalid mode")
+	ErrPromptRequired         = errors.New("prompt is required when mode is prompt")
+	ErrInvalidRecipeData      = errors.New("recipe draft is invalid")
+	ErrOutputContractInvalid  = errors.New("output contract is invalid")
+	ErrOutputContractViolated = errors.New("recipe draft does not satisfy expected output format")
 )
 
 type GenerationMode string
@@ -20,26 +21,6 @@ const (
 	ModePrompt GenerationMode = "prompt"
 )
 
-type RecipeConstraints struct {
-	HydrationMin       *float64 `json:"hydrationMin,omitempty"`
-	HydrationMax       *float64 `json:"hydrationMax,omitempty"`
-	Vegetarian         *bool    `json:"vegetarian,omitempty"`
-	IncludeIngredients []string `json:"includeIngredients,omitempty"`
-	ExcludeIngredients []string `json:"excludeIngredients,omitempty"`
-}
-
-func (c *RecipeConstraints) Validate() error {
-	if c == nil {
-		return nil
-	}
-
-	if c.HydrationMin != nil && c.HydrationMax != nil && *c.HydrationMin > *c.HydrationMax {
-		return ErrInvalidHydration
-	}
-
-	return nil
-}
-
 type RecipeDraft struct {
 	Name        string             `json:"name"`
 	Description string             `json:"description"`
@@ -47,6 +28,43 @@ type RecipeDraft struct {
 	Dough       map[string]float64 `json:"dough"`
 	Topping     map[string]float64 `json:"topping"`
 	Steps       []string           `json:"steps"`
+}
+
+type OutputContract struct {
+	RequiredDoughIngredients   []string `json:"requiredDoughIngredients,omitempty"`
+	RequiredToppingIngredients []string `json:"requiredToppingIngredients,omitempty"`
+}
+
+func DefaultOutputContract() OutputContract {
+	return OutputContract{
+		RequiredDoughIngredients: []string{"flour", "water"},
+	}
+}
+
+func (c *OutputContract) Effective() OutputContract {
+	if c == nil {
+		return DefaultOutputContract()
+	}
+
+	effective := *c
+	if len(effective.RequiredDoughIngredients) == 0 {
+		effective.RequiredDoughIngredients = DefaultOutputContract().RequiredDoughIngredients
+	}
+	return effective
+}
+
+func (c OutputContract) Validate() error {
+	for _, ingredient := range c.RequiredDoughIngredients {
+		if strings.TrimSpace(ingredient) == "" {
+			return fmt.Errorf("%w: required dough ingredient cannot be empty", ErrOutputContractInvalid)
+		}
+	}
+	for _, ingredient := range c.RequiredToppingIngredients {
+		if strings.TrimSpace(ingredient) == "" {
+			return fmt.Errorf("%w: required topping ingredient cannot be empty", ErrOutputContractInvalid)
+		}
+	}
+	return nil
 }
 
 func (r RecipeDraft) Validate() error {
@@ -60,6 +78,35 @@ func (r RecipeDraft) Validate() error {
 		return fmt.Errorf("%w: topping must contain ingredients", ErrInvalidRecipeData)
 	}
 	return nil
+}
+
+func (r RecipeDraft) ValidateAgainstContract(contract OutputContract) error {
+	if err := contract.Validate(); err != nil {
+		return err
+	}
+
+	for _, ingredient := range contract.RequiredDoughIngredients {
+		if !hasKeyCaseInsensitive(r.Dough, ingredient) {
+			return fmt.Errorf("%w: missing required dough ingredient %q", ErrOutputContractViolated, ingredient)
+		}
+	}
+	for _, ingredient := range contract.RequiredToppingIngredients {
+		if !hasKeyCaseInsensitive(r.Topping, ingredient) {
+			return fmt.Errorf("%w: missing required topping ingredient %q", ErrOutputContractViolated, ingredient)
+		}
+	}
+
+	return nil
+}
+
+func hasKeyCaseInsensitive(m map[string]float64, key string) bool {
+	target := strings.ToLower(strings.TrimSpace(key))
+	for k := range m {
+		if strings.ToLower(strings.TrimSpace(k)) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (m GenerationMode) Validate(prompt string) error {
